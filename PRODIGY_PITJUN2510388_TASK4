@@ -1,0 +1,124 @@
+import os
+import cv2
+import numpy as np
+from PIL import Image
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+
+class CatDogClassifier:
+    def __init__(self, train_dir, model_path='cats_dogs_model.h5', img_size=(150, 150)):
+        self.train_dir = train_dir
+        self.model_path = model_path
+        self.img_size = img_size
+        self.model = None
+        self.train_data = None
+        self.val_data = None
+
+    def remove_corrupt_images(self):
+        print("🧹 Checking for corrupt images...")
+        count = 0
+        for folder in os.listdir(self.train_dir):
+            folder_path = os.path.join(self.train_dir, folder)
+            for filename in os.listdir(folder_path):
+                file_path = os.path.join(folder_path, filename)
+                try:
+                    with Image.open(file_path) as img:
+                        img.verify()
+                except Exception:
+                    print(f"Deleting: {file_path}")
+                    os.remove(file_path)
+                    count += 1
+        print(f"✅ Removed {count} corrupt image(s).\n")
+
+    def load_data(self):
+        datagen = ImageDataGenerator(
+            rescale=1./255,
+            validation_split=0.2
+        )
+
+        self.train_data = datagen.flow_from_directory(
+            self.train_dir,
+            target_size=self.img_size,
+            batch_size=32,
+            class_mode='binary',
+            subset='training'
+        )
+
+        self.val_data = datagen.flow_from_directory(
+            self.train_dir,
+            target_size=self.img_size,
+            batch_size=32,
+            class_mode='binary',
+            subset='validation'
+        )
+
+    def build_model(self):
+        self.model = Sequential([
+            Conv2D(32, (3,3), activation='relu', input_shape=(*self.img_size, 3)),
+            MaxPooling2D(2, 2),
+            Conv2D(64, (3,3), activation='relu'),
+            MaxPooling2D(2, 2),
+            Flatten(),
+            Dense(128, activation='relu'),
+            Dropout(0.5),
+            Dense(1, activation='sigmoid')
+        ])
+        self.model.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=['accuracy'])
+        print("✅ Model built.")
+
+    def train(self, epochs=5):
+        print("🚀 Starting training...")
+        self.model.fit(self.train_data, validation_data=self.val_data, epochs=epochs)
+        self.model.save(self.model_path)
+        print(f"✅ Model saved to {self.model_path}")
+
+    def load(self):
+        if os.path.exists(self.model_path):
+            self.model = load_model(self.model_path)
+            print("✅ Model loaded.")
+        else:
+            raise FileNotFoundError(f"{self.model_path} not found.")
+
+    def predict_from_camera(self):
+        if self.model is None:
+            raise ValueError("Model not loaded.")
+        
+        cap = cv2.VideoCapture(0)
+        print("📷 Press 'q' to quit.")
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            img = cv2.resize(frame, self.img_size)
+            img_array = img.astype("float32") / 255.0
+            img_array = np.expand_dims(img_array, axis=0)
+            prediction = self.model.predict(img_array)[0][0]
+            label = "Dog" if prediction > 0.5 else "Cat"
+
+            cv2.putText(frame, f"Prediction: {label}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+            cv2.imshow("Webcam", frame)
+
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+# ==== Run Script ====
+if __name__ == "__main__":
+    classifier = CatDogClassifier(train_dir="D:/PITECH/Task4/train")
+
+    # Only needed once
+    #classifier.remove_corrupt_images()
+
+    #classifier.load_data()
+    #classifier.build_model()
+    #classifier.train(epochs=5)
+
+    classifier.load()  # Use this if model already trained
+    classifier.predict_from_camera()
