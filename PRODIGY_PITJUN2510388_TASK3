@@ -1,0 +1,126 @@
+import os
+import cv2
+import numpy as np
+import tensorflow as tf
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+path = r"D:\PITECH\Task3\leapGestRecog"
+img_size = 64
+
+labels = sorted(os.listdir(path))
+X = []
+y = []
+
+for label in labels:
+    label_path = os.path.join(path, label)
+    if not os.path.isdir(label_path):
+        continue
+    for subfolder in os.listdir(label_path):
+        subfolder_path = os.path.join(label_path, subfolder)
+        if not os.path.isdir(subfolder_path):
+            continue
+        for frame in os.listdir(subfolder_path):
+            fpath = os.path.join(subfolder_path, frame)
+            if not frame.lower().endswith(('.jpg', '.jpeg', '.png')):
+                continue
+            img = cv2.imread(fpath, 0)
+            if img is not None:
+                img = cv2.resize(img, (img_size, img_size))
+                X.append(img)
+                y.append(labels.index(label))
+
+print("Loaded:", len(X), "images across", len(set(y)), "labels")
+
+X = np.array(X).reshape(-1, img_size, img_size, 1) / 255.0
+y = np.array(y)
+
+x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=8)
+
+print("Training on", x_train.shape[0], "samples")
+
+model = tf.keras.models.Sequential([
+    tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(img_size, img_size, 1)),
+    tf.keras.layers.MaxPooling2D(),
+    tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+    tf.keras.layers.MaxPooling2D(),
+    tf.keras.layers.Flatten(),
+    tf.keras.layers.Dense(128, activation='relu'),
+    tf.keras.layers.Dense(len(labels), activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+model.fit(x_train, y_train, epochs=5, validation_split=0.2)
+
+# Save trained model
+model.save("gesture_model.h5")
+
+pred = model.predict(x_test)
+pred_classes = np.argmax(pred, axis=1)
+
+acc = accuracy_score(y_test, pred_classes)
+print(f"\nTest Accuracy: {acc * 100:.2f}%")
+
+cm = confusion_matrix(y_test, pred_classes)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, xticklabels=labels, yticklabels=labels, fmt='d', cmap='magma')
+plt.title("Confusion Matrix")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.tight_layout()
+plt.show()
+
+LIVE PREDICT CODE:
+
+import cv2
+import numpy as np
+import tensorflow as tf
+import os
+
+img_size = 64
+model = tf.keras.models.load_model("gesture_model.h5")
+labels = sorted(os.listdir(r"D:\PITECH\Task3\leapGestRecog"))
+
+cap = cv2.VideoCapture(0)
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    flipped = cv2.flip(frame, 1)
+    hsv = cv2.cvtColor(flipped, cv2.COLOR_BGR2HSV)
+
+    lower = np.array([0, 20, 70], dtype=np.uint8)
+    upper = np.array([20, 255, 255], dtype=np.uint8)
+    mask = cv2.inRange(hsv, lower, upper)
+
+    mask = cv2.GaussianBlur(mask, (5, 5), 0)
+    contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    if contours:
+        max_contour = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(max_contour) > 1000:
+            x, y, w, h = cv2.boundingRect(max_contour)
+            hand_img = flipped[y:y+h, x:x+w]
+            gray = cv2.cvtColor(hand_img, cv2.COLOR_BGR2GRAY)
+            resized = cv2.resize(gray, (img_size, img_size))
+            norm = resized.reshape(1, img_size, img_size, 1) / 255.0
+
+            pred = model.predict(norm, verbose=0)
+            index = np.argmax(pred)
+            label = labels[index]
+            conf = np.max(pred)
+
+            cv2.putText(flipped, f"{label} ({conf*100:.1f}%)", (x, y - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.rectangle(flipped, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    cv2.imshow("Hand Detection + Classification", flipped)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
